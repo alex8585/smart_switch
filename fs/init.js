@@ -1,112 +1,97 @@
-load('api_aws.js');
-load('api_azure.js');
 load('api_config.js');
 load('api_dash.js');
-load('api_events.js');
-load('api_gcp.js');
 load('api_gpio.js');
 load('api_mqtt.js');
-load('api_shadow.js');
 load('api_timer.js');
 load('api_sys.js');
-load('api_watson.js');
 
-let btn = Cfg.get('board.btn1.pin');              // Built-in button GPIO
-let led = Cfg.get('board.led1.pin');              // Built-in LED GPIO number
-let onhi = Cfg.get('board.led1.active_high');     // LED on when high?
-let state = {on: false, btnCount: 0, uptime: 0};  // Device state
-let online = false;                               // Connected to the cloud?
+          
+let led_pin = Cfg.get('board.led1.pin');           
+let sensor_pin = Cfg.get('smart_switch.sensor_pin'); 
+let switch_pin = Cfg.get('smart_switch.switch_pin'); 
 
-let setLED = function(on) {
-  let level = onhi ? on : !on;
-  GPIO.write(led, level);
-  print('LED on ->', on);
-};
+let light_mode = Cfg.get('smart_switch.light_mode'); 
+let light_time = Cfg.get('smart_switch.light_time');
 
-GPIO.set_mode(led, GPIO.MODE_OUTPUT);
-setLED(state.on);
+let light_is_up = false;
+let light_timer_id;
 
-let reportState = function() {
-  Shadow.update(0, state);
-};
+GPIO.set_mode(led_pin, GPIO.MODE_OUTPUT);
+GPIO.set_mode(switch_pin, GPIO.MODE_OUTPUT);
+GPIO.write(led_pin, 0);
+GPIO.write(switch_pin, 0);
 
-// Update state every second, and report to cloud if online
-Timer.set(1000, Timer.REPEAT, function() {
-  state.uptime = Sys.uptime();
-  state.ram_free = Sys.free_ram();
-  print('online:', online, JSON.stringify(state));
-  if (online) reportState();
-}, null);
-
-// Set up Shadow handler to synchronise device state with the shadow state
-Shadow.addHandler(function(event, obj) {
-  if (event === 'UPDATE_DELTA') {
-    print('GOT DELTA:', JSON.stringify(obj));
-    for (let key in obj) {  // Iterate over all keys in delta
-      if (key === 'on') {   // We know about the 'on' key. Handle it!
-        state.on = obj.on;  // Synchronise the state
-        setLED(state.on);   // according to the delta
-      } else if (key === 'reboot') {
-        state.reboot = obj.reboot;      // Reboot button clicked: that
-        Timer.set(750, 0, function() {  // incremented 'reboot' counter
-          Sys.reboot(500);                 // Sync and schedule a reboot
-        }, null);
-      }
-    }
-    reportState();  // Report our new state, hopefully clearing delta
-  }
-});
-
-if (btn >= 0) {
-  let btnCount = 0;
-  let btnPull, btnEdge;
-  if (Cfg.get('board.btn1.pull_up') ? GPIO.PULL_UP : GPIO.PULL_DOWN) {
-    btnPull = GPIO.PULL_UP;
-    btnEdge = GPIO.INT_EDGE_NEG;
-  } else {
-    btnPull = GPIO.PULL_DOWN;
-    btnEdge = GPIO.INT_EDGE_POS;
-  }
-  GPIO.set_button_handler(btn, btnPull, btnEdge, 20, function() {
-    state.btnCount++;
-    let message = JSON.stringify(state);
-    let sendMQTT = true;
-    if (Azure.isConnected()) {
-      print('== Sending Azure D2C message:', message);
-      Azure.sendD2CMsg('', message);
-      sendMQTT = false;
-    }
-    if (GCP.isConnected()) {
-      print('== Sending GCP event:', message);
-      GCP.sendEvent(message);
-      sendMQTT = false;
-    }
-    if (Watson.isConnected()) {
-      print('== Sending Watson event:', message);
-      Watson.sendEventJSON('ev', {d: state});
-      sendMQTT = false;
-    }
-    if (Dash.isConnected()) {
-      print('== Click!');
-      // TODO: Maybe do something else?
-      sendMQTT = false;
-    }
-    // AWS is handled as plain MQTT since it allows arbitrary topics.
-    if (AWS.isConnected() || (MQTT.isConnected() && sendMQTT)) {
-      let topic = 'devices/' + Cfg.get('device.id') + '/events';
-      print('== Publishing to ' + topic + ':', message);
-      MQTT.pub(topic, message, 0 /* QoS */);
-    } else if (sendMQTT) {
-      print('== Not connected!');
-    }
-  }, null);
+if(light_mode === 1) {
+  switch_on_handler();
 }
 
-Event.on(Event.CLOUD_CONNECTED, function() {
-  online = true;
-  Shadow.update(0, {ram_total: Sys.total_ram()});
+function switch_on_handler() {
+  if(!light_is_up) {
+    print('switch_on_handler');
+    GPIO.write(led_pin, 1);
+    GPIO.write(switch_pin, 1);
+    light_is_up = true;
+  }
+}
+
+function switch_off_handler() {
+  if(light_is_up) {
+    print('switch_off_handler');
+    GPIO.write(led_pin, 0);
+    GPIO.write(switch_pin, 0);
+    light_is_up = false;
+  }
+}
+
+let mgos_wifi_get_status = ffi('char* mgos_wifi_get_status_str()');
+
+Timer.set(30000, Timer.REPEAT, function(){
+  let wifi_status = mgos_wifi_get_status();
+  if(wifi_status === 'disconnected' || wifi_status === 'connecting') {
+    let is_ap = Cfg.get('wifi.ap.enable'); 
+    if(!is_ap) {
+      Cfg.set({wifi:{ap:{enable:true}}});
+      print('AP enable true and system will reboot...');
+      Sys.reboot(3000);
+    }
+  }
+  print(wifi_status);
 }, null);
 
-Event.on(Event.CLOUD_DISCONNECTED, function() {
-  online = false;
+
+GPIO.set_mode(sensor_pin, GPIO.MODE_INPUT);
+GPIO.set_int_handler(sensor_pin, GPIO.INT_EDGE_POS, function() {
+
+  if(light_mode === 2) {
+    if(light_is_up) {
+      Timer.del(light_timer_id);
+    } else {
+      switch_on_handler();
+    }
+  }
+
+  light_timer_id = Timer.set(light_time  * 1000 ,0, function(){
+    if(light_mode === 2) {
+      switch_off_handler();
+    }
+  }, null);
+
+}, null);
+GPIO.enable_int(sensor_pin);
+
+
+MQTT.sub('switch_35_light_mode', function(conn, topic, msg){
+  light_mode = JSON.parse(msg);
+  Cfg.set({smart_switch:{light_mode:light_mode}});
+  if(light_mode === 1) {
+    switch_on_handler();
+  } else if (light_mode === 0) {
+    switch_off_handler();
+  }
+}, null);
+
+MQTT.sub('switch_35_light_time', function(conn, topic, msg){
+  light_time = JSON.parse(msg);
+  Cfg.set({smart_switch:{light_time:light_time}});
+  
 }, null);
