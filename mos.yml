@@ -8,8 +8,13 @@ modules_version: ${mos.version}
 mongoose_os_version: ${mos.version}
 
 config_schema:
-  - ["mqtt.server", "iot.eclipse.org:1883"]
+  - ["mqtt.server", "192.168.0.10"]
   - ["i2c.enable", true]
+  - ["smart_switch", "o",{title: "smart_switch"}]
+  - ["smart_switch.sensor_pin", "i", 22, {title: "sensor_pin"}]
+  - ["smart_switch.switch_pin", "i", 13, {title: "switch_pin"}]
+  - ["smart_switch.light_mode", "i", 2, {title: "light_mode"}]
+  - ["smart_switch.light_time", "i", 30, {title: "light_time"}]
 
 tags:
   - js

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Wifi settings</title>
+    <style>
+        .form-controll label {
+            display: inline-block;
+            width:100px;
+        }
+    </style>
+</head>
+<body>
+    <div class='form'>
+        <h1>Wifi settings</h1>
+        <div class="form-controll">
+            <label>Ssid</label>
+            <input type='text' id="ssid">
+        </div><br>
+        <div class="form-controll">
+            <label>Passord</label>
+            <input type='text' id="pass">
+        </div><br>
+        <button id='submit-btn'>
+            Save
+        </button>
+    </div>
+    <script>
+        let btn = document.getElementById('submit-btn');
+        btn.onclick = function(){
+            let ssid = document.getElementById('ssid').value;
+            let pass = document.getElementById('pass').pass;
+
+            let data = {
+                config: {
+                    wifi: {
+                        sta: { enable:true, ssid:ssid, pass:pass},
+                        ap: {enable:false}
+                    }
+                }
+            }
+
+            fetch('/rpc/Config.Set',{
+                method:"post",
+                body: JSON.stringify(data)
+            }).then(function(data){
+                return data.json();
+            }).then(function(data){
+                console.log(data);
+                fetch('/rpc/Config.Save',{
+                    method:"post",
+                    body: JSON.stringify({reboot:true})
+                }).then(function(data){
+                    return data.json();
+                }).then(function(data){
+                    console.log(data);
+                })
+            })
+
+        } 
+    </script>
+    
+</body>
+</html>
